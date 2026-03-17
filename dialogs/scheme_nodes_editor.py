@@ -423,27 +423,328 @@ def create_scheme_nodes_editor(app, scheme_id, scheme_name):
 
     splitter.addWidget(left_container)
 
-    # 右侧：仅保留坐标系
+    # 右侧：坐标系 + 动画控制按钮
     right_container = QtWidgets.QWidget()
     right_layout = QtWidgets.QVBoxLayout(right_container)
     right_layout.setContentsMargins(6, 0, 0, 0)
     right_layout.setSpacing(6)
 
+    # 添加动画控制区域（在坐标系上方）
+    animate_control_widget = QtWidgets.QWidget()
+    animate_control_layout = QtWidgets.QVBoxLayout(animate_control_widget)
+    animate_control_layout.setContentsMargins(0, 0, 0, 0)
+    animate_control_layout.setSpacing(5)
+    
+    # 时间步长滑动条
+    time_step_layout = QtWidgets.QHBoxLayout()
+    time_step_label = QtWidgets.QLabel("时间步长:")
+    time_step_value_label = QtWidgets.QLabel("1.0秒")
+    time_step_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+    time_step_slider.setMinimum(1)  # 0.1秒
+    time_step_slider.setMaximum(50)  # 5.0秒
+    time_step_slider.setValue(10)  # 默认1.0秒
+    time_step_slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
+    time_step_slider.setTickInterval(10)
+    
+    def on_time_step_changed(value):
+        app.animation_time_step = value / 10.0
+        time_step_value_label.setText(f"{app.animation_time_step:.1f}秒")
+    
+    time_step_slider.valueChanged.connect(on_time_step_changed)
+    
+    time_step_layout.addWidget(time_step_label)
+    time_step_layout.addWidget(time_step_slider, 1)
+    time_step_layout.addWidget(time_step_value_label)
+    animate_control_layout.addLayout(time_step_layout)
+    
+    # 动画时长滑动条
+    duration_layout = QtWidgets.QHBoxLayout()
+    duration_label = QtWidgets.QLabel("动画时长:")
+    duration_value_label = QtWidgets.QLabel("60秒")
+    duration_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+    duration_slider.setMinimum(10)  # 10秒
+    duration_slider.setMaximum(300)  # 300秒
+    duration_slider.setValue(60)  # 默认60秒
+    duration_slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
+    duration_slider.setTickInterval(30)
+    
+    def on_duration_changed(value):
+        app.animation_duration = float(value)
+        duration_value_label.setText(f"{app.animation_duration:.0f}秒")
+    
+    duration_slider.valueChanged.connect(on_duration_changed)
+    
+    duration_layout.addWidget(duration_label)
+    duration_layout.addWidget(duration_slider, 1)
+    duration_layout.addWidget(duration_value_label)
+    animate_control_layout.addLayout(duration_layout)
+    
+    # 动画按钮行
+    animate_btn_layout = QtWidgets.QHBoxLayout()
+    
+    # 启动动画按钮
+    btn_start_animate = QtWidgets.QPushButton("▶ 启动动目标动画")
+    btn_start_animate.setStyleSheet("""
+        QPushButton {
+            background-color: #4CAF50;
+            color: white;
+            font-weight: bold;
+            padding: 5px 15px;
+        }
+        QPushButton:hover {
+            background-color: #45a049;
+        }
+    """)
+    
+    # 停止动画按钮
+    btn_stop_animate = QtWidgets.QPushButton("⏹ 停止动画")
+    btn_stop_animate.setStyleSheet("""
+        QPushButton {
+            background-color: #f44336;
+            color: white;
+            font-weight: bold;
+            padding: 5px 15px;
+        }
+        QPushButton:hover {
+            background-color: #da190b;
+        }
+    """)
+    btn_stop_animate.setEnabled(False)  # 初始状态禁用
+    
+    # 重置位置按钮
+    btn_reset_animate = QtWidgets.QPushButton("↺ 重置位置")
+    btn_reset_animate.setStyleSheet("""
+        QPushButton {
+            background-color: #2196F3;
+            color: white;
+            font-weight: bold;
+            padding: 5px 15px;
+        }
+        QPushButton:hover {
+            background-color: #0b7dda;
+        }
+    """)
+    
+    # 连接按钮信号
+    btn_start_animate.clicked.connect(lambda: _start_animation_in_editor(btn_start_animate, btn_stop_animate, btn_reset_animate))
+    btn_stop_animate.clicked.connect(lambda: _stop_animation_in_editor(btn_start_animate, btn_stop_animate, btn_reset_animate))
+    btn_reset_animate.clicked.connect(lambda: _reset_animation_in_editor())
+    
+    animate_btn_layout.addWidget(btn_start_animate)
+    animate_btn_layout.addWidget(btn_stop_animate)
+    animate_btn_layout.addWidget(btn_reset_animate)
+    animate_btn_layout.addStretch()
+    animate_control_layout.addLayout(animate_btn_layout)
+    
+    # 动画状态标签
+    animation_status_label = QtWidgets.QLabel("状态: 就绪")
+    animation_status_label.setStyleSheet("color: #666; font-size: 12px;")
+    animate_control_layout.addWidget(animation_status_label)
+    
+    right_layout.addWidget(animate_control_widget)
+
     # 在对话框内创建独立画布，并将绘图上下文切换到该画布
-    dlg_canvas = app.canvas.__class__(dlg)
+    from widgets.plot_panel import MplCanvas
+    from views import PlotView
+    dlg_canvas = MplCanvas(dlg)
     dlg_ax = dlg_canvas.ax
     app.setup_coordinate_axes(dlg_ax, '节点分布图')
     dlg_canvas.draw()
+
+    # 创建绘图视图
+    plot_view = PlotView(dlg_canvas, app.xlim, app.ylim)
 
     # 备份主窗体画布上下文并切换到对话框上下文
     _backup_canvas = getattr(app, '_backup_canvas', None)
     _backup_ax = getattr(app, '_backup_ax', None)
     app._backup_canvas = app.canvas
-    app._backup_ax = app.ax
-    app.activate_canvas(dlg_canvas)
+    app._backup_ax = getattr(app, 'ax', None)
+    app.canvas = dlg_canvas
+    app.ax = dlg_ax
+    app.plot_view = plot_view
     refresh_scheme_plot()
 
     right_layout.addWidget(dlg_canvas, 1)
+    
+    # 动画控制函数
+    def _start_animation_in_editor(start_btn, stop_btn, reset_btn):
+        """在编辑器中启动动目标动画"""
+        from algorithms import has_movable_targets
+        
+        # 获取所有目标
+        all_targets = app.get_all_targets() if app.multi_target_mode else None
+        if not all_targets and not app.target_nodes:
+            QtWidgets.QMessageBox.warning(dlg, "提示", "没有目标节点")
+            return
+        
+        targets_to_check = all_targets if all_targets else {
+            t['id']: t for t in app.target_nodes
+        }
+        
+        # 检查是否有可动目标（有速度的目标）
+        has_movable = False
+        for tid, target in targets_to_check.items():
+            vx = target.get('vx', 0) or 0
+            vy = target.get('vy', 0) or 0
+            vh = target.get('vh', 0) or 0
+            if vx != 0 or vy != 0 or vh != 0:
+                has_movable = True
+                break
+        
+        if not has_movable:
+            QtWidgets.QMessageBox.information(dlg, "提示", "没有可动目标（vx/vy/vh均为0）")
+            return
+        
+        # 保存初始位置（如果还没有保存）
+        if not hasattr(app, 'original_target_positions') or not app.original_target_positions:
+            app.original_target_positions = {}
+            for tid, target in targets_to_check.items():
+                app.original_target_positions[tid] = target['coord']
+        
+        # 创建动画定时器
+        app.animation_timer = QtCore.QTimer(dlg)
+        app.animation_timer.timeout.connect(lambda: _animation_step_in_editor(start_btn, stop_btn, reset_btn))
+        
+        # 初始化动画状态
+        app.animation_start_time = 0.0
+        app.is_animating = True
+        
+        # 更新按钮状态
+        start_btn.setEnabled(False)
+        stop_btn.setEnabled(True)
+        reset_btn.setEnabled(False)
+        animation_status_label.setText(f"状态: 运行中 (0.0/{app.animation_duration:.0f}秒)")
+        
+        # 启动动画
+        app.animation_timer.start(int(app.animation_time_step * 1000))
+        
+        QtWidgets.QMessageBox.information(
+            dlg, "动画启动", 
+            f"动目标动画已启动\n时长: {app.animation_duration:.0f}秒\n时间步长: {app.animation_time_step:.1f}秒"
+        )
+    
+    def _animation_step_in_editor(start_btn, stop_btn, reset_btn):
+        """动画单步执行"""
+        from algorithms import update_all_positions
+        
+        # 检查是否结束
+        if app.animation_start_time >= app.animation_duration:
+            _stop_animation_in_editor(start_btn, stop_btn, reset_btn)
+            return
+        
+        # 获取当前目标
+        if app.multi_target_mode:
+            all_targets = app.get_all_targets()
+        else:
+            all_targets = {t['id']: t for t in app.target_nodes}
+        
+        # 获取节点配置（用于update_all_positions的nodes参数）
+        try:
+            nodes = app.get_nodes_dict()
+        except ValueError:
+            nodes = {'recon': {}, 'command': {}, 'fire': {}}
+        
+        # 更新目标位置（正确传入参数：targets, nodes, time_elapsed）
+        updated_targets, _ = update_all_positions(all_targets, nodes, app.animation_time_step, update_nodes=False)
+        
+        # 更新时间
+        app.animation_start_time += app.animation_time_step
+        
+        # 更新UI中的目标位置
+        _update_target_positions_in_editor(updated_targets)
+        
+        # 重新运行算法
+        _rebuild_ssl_in_editor(updated_targets)
+        
+        # 刷新显示
+        refresh_scheme_plot()
+        
+        # 更新状态标签
+        animation_status_label.setText(f"状态: 运行中 ({app.animation_start_time:.1f}/{app.animation_duration:.0f}秒)")
+    
+    def _update_target_positions_in_editor(updated_targets):
+        """更新UI中的目标位置"""
+        if app.multi_target_mode:
+            for tid, target in updated_targets.items():
+                if tid in app._last_multi_targets:
+                    app._last_multi_targets[tid]['coord'] = target['coord']
+        else:
+            for node in app.target_nodes:
+                tid = node['id']
+                if tid in updated_targets:
+                    node['coord'] = updated_targets[tid]['coord']
+    
+    def _rebuild_ssl_in_editor(updated_targets):
+        """使用更新后的目标位置重新构建SSL"""
+        try:
+            nodes = app.get_nodes_dict()
+            preference_table = app.get_fire_target_preference_table()
+            
+            if app.multi_target_mode:
+                app.current_result = app.algorithm_service.build_multi_target_ssl(
+                    updated_targets, nodes, preference_table
+                )
+            else:
+                all_nodes = app.get_all_nodes_list()
+                app.current_result = app.algorithm_service.run_loop(all_nodes, nodes)
+        except Exception as e:
+            print(f"重建SSL失败: {e}")
+    
+    def _stop_animation_in_editor(start_btn, stop_btn, reset_btn):
+        """停止动目标动画"""
+        if app.animation_timer:
+            app.animation_timer.stop()
+            app.animation_timer = None
+        
+        app.is_animating = False
+        
+        # 更新按钮状态
+        start_btn.setEnabled(True)
+        stop_btn.setEnabled(False)
+        reset_btn.setEnabled(True)
+        animation_status_label.setText(f"状态: 已停止 ({app.animation_start_time:.1f}/{app.animation_duration:.0f}秒)")
+        
+        # 恢复初始位置
+        _restore_original_positions_in_editor()
+        
+        QtWidgets.QMessageBox.information(dlg, "动画结束", "动目标动画已结束，目标位置已恢复")
+    
+    def _reset_animation_in_editor():
+        """重置动画状态"""
+        # 停止动画（如果正在运行）
+        if app.is_animating and app.animation_timer:
+            app.animation_timer.stop()
+            app.animation_timer = None
+            app.is_animating = False
+        
+        # 恢复初始位置
+        _restore_original_positions_in_editor()
+        
+        # 重置时间
+        app.animation_start_time = 0.0
+        
+        # 更新状态
+        animation_status_label.setText("状态: 就绪")
+        
+        # 清除保存的初始位置（下次启动时会重新保存）
+        app.original_target_positions = {}
+    
+    def _restore_original_positions_in_editor():
+        """恢复目标初始位置"""
+        if not hasattr(app, 'original_target_positions') or not app.original_target_positions:
+            return
+        
+        if app.multi_target_mode:
+            for tid, coord in app.original_target_positions.items():
+                if tid in app._last_multi_targets:
+                    app._last_multi_targets[tid]['coord'] = coord
+        else:
+            for node in app.target_nodes:
+                tid = node['id']
+                if tid in app.original_target_positions:
+                    node['coord'] = app.original_target_positions[tid]
+        
+        refresh_scheme_plot()
 
     buttons_row = QtWidgets.QHBoxLayout()
     # 四个按钮（使用与主页面相同的行为）
@@ -511,7 +812,9 @@ def create_scheme_nodes_editor(app, scheme_id, scheme_name):
         # 关闭时恢复主窗体画布上下文
         if hasattr(app, '_backup_canvas') and hasattr(app, '_backup_ax'):
             app.activate_canvas(app._backup_canvas)
-            refresh_scheme_plot()
+            # 不调用 refresh_scheme_plot()，保持主页面不变
+            # 只刷新方案列表，不显示控制面板和画布
+            app.scheme_panel_widget.refresh()
         _cleanup_editor_buttons()
         dlg.accept()
 

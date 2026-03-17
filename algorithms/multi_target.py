@@ -5,16 +5,24 @@
 - 先计算所有目标的可行链
 - 根据弹目偏好和侦察并行约束做分配
 - 输出分配报告和统计指标
+
+支持动目标：通过 time_elapsed 参数实现目标位置随时间更新
 """
 import numpy as np
 import pandas as pd
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 from .single_target import (
     distance,
     loop_method,
     _calculate_chain_shape_metrics,
     _segments_strictly_intersect,
+)
+from .moving_target import (
+    is_movable_target,
+    update_target_position,
+    update_all_positions,
+    has_movable_targets,
 )
 
 

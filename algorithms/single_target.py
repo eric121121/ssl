@@ -6,11 +6,20 @@
 - 穷举遍历（loop_method）
 - 粒子群（pso_method）
 并提供大量几何与指标计算辅助函数。
+
+支持动目标：通过 time_elapsed 参数实现目标位置随时间更新
 """
 import numpy as np
 import pandas as pd
 from math import sqrt
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
+
+from .moving_target import (
+    is_movable_target,
+    update_target_position,
+    calculate_moving_position,
+    has_movable_targets,
+)
 
 
 # PSO 适应度函数权重常量（多目标加权系数）

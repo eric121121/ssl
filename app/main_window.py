@@ -36,8 +36,8 @@ class SSLApp(QtWidgets.QMainWindow):
         self.schemes = []  # 存储所有方案 [(scheme_id, scheme_name, creator)]
         
         # 坐标范围配置
-        self.xlim = (-20, 0)
-        self.ylim = (30, 40)
+        self.xlim = (-50, 50)
+        self.ylim = (0, 50)
 
         central = QtWidgets.QWidget()
         # QMainWindow 需要一个中央控件，这里用 QWidget + QVBoxLayout 包裹所有 UI 元素。
@@ -50,56 +50,32 @@ class SSLApp(QtWidgets.QMainWindow):
         main_vbox = QtWidgets.QVBoxLayout()
         
         # 顶部控制面板（水平布局）
-        # 所有算法按钮集中放这里，便于统一控制启用/禁用状态。
+        # 控制面板保留但移除算法按钮，算法功能只在二级页面提供
         self.control_panel = QtWidgets.QWidget()
         self.control_panel_layout = QtWidgets.QHBoxLayout(self.control_panel)
         self.control_panel_layout.setContentsMargins(10, 10, 10, 10)
         self.control_panel_layout.setSpacing(10)
         
-        # 添加按钮控件（水平排列）- 去除了"方案管理"按钮和分隔线
-        self.loop_button = QtWidgets.QPushButton("\"遍历搜索\"")
-        # 每个按钮直接连接一个算法触发槽函数，方便根据模式动态启用。
-        self.loop_button.clicked.connect(self.run_loop_search)
-        self.control_panel_layout.addWidget(self.loop_button)
-
-        self.pso_button = QtWidgets.QPushButton("\"粒子群算法\"")
-        self.pso_button.clicked.connect(self.run_pso_search)
-        self.control_panel_layout.addWidget(self.pso_button)
-
-        self.multi_target_button = QtWidgets.QPushButton("\"多目标SSL构建\"")
-        self.multi_target_button.clicked.connect(self.run_multi_target_ssl)
-        self.control_panel_layout.addWidget(self.multi_target_button)
-
-        self.mopso_button = QtWidgets.QPushButton("\"多目标MOPSO优化\"")
-        self.mopso_button.clicked.connect(self.run_mopso_multi_target)
-        self.control_panel_layout.addWidget(self.mopso_button)
         
-        # 下方水平布局：左侧方案管理面板 + 右侧画布
+        
+        # 下方水平布局：左侧方案管理面板
         bottom_hbox = QtWidgets.QHBoxLayout()
         
         # 左侧方案管理面板
-        # SchemePanel 通过信号把“选中方案”和“编辑方案”事件回传给主窗口。
+        # SchemePanel 通过信号把"选中方案"和"编辑方案"事件回传给主窗口。
         self.scheme_panel_widget = SchemePanel(self.scheme_service)
         self.scheme_panel_widget.schemeSelected.connect(self.on_scheme_selected)
         self.scheme_panel_widget.editRequested.connect(self.open_scheme_nodes_editor)
-
-        # Matplotlib 画布
-        self.canvas = MplCanvas(self)
-        self.plot_view = PlotView(self.canvas, self.xlim, self.ylim)
-        self.activate_canvas(self.canvas)
         
-        # 将方案管理面板和画布添加到水平布局中
-        bottom_hbox.addWidget(self.scheme_panel_widget, 1)  # 方案管理面板（左侧）
-        bottom_hbox.addWidget(self.canvas, 1)  # 画布占剩余空间（右侧）
+        # 将方案管理面板添加到水平布局中
+        bottom_hbox.addWidget(self.scheme_panel_widget, 1)  # 方案管理面板
         
         # 将控制面板和底部布局添加到垂直布局中
-        # 控制面板高度固定，底部区域为 1 份伸缩系数，保证画布拥有最大空间。
-        main_vbox.addWidget(self.control_panel, 0)  # 控制面板（顶部）
-        main_vbox.addLayout(bottom_hbox, 1)  # 底部布局（方案管理 + 画布）
+        main_vbox.addWidget(self.control_panel, 0)  # 控制面板（顶部，隐藏）
+        main_vbox.addLayout(bottom_hbox, 1)  # 底部布局（方案管理）
 
-        # 主页面仅显示方案管理区域，隐藏顶部控制面板与右侧画布
+        # 主页面仅显示方案管理区域，隐藏顶部控制面板
         self.control_panel.setVisible(False)
-        self.canvas.setVisible(False)
         
         # 将主布局添加到垂直布局中
         vbox.addLayout(main_vbox)
@@ -129,36 +105,25 @@ class SSLApp(QtWidgets.QMainWindow):
         # 更新按钮状态
         self.update_buttons_based_on_mode()
 
-        self.show_initial_nodes()
+        # 动目标动画相关
+        self.animation_timer = None  # 动画定时器
+        self.animation_start_time = None  # 动画开始时间
+        self.animation_duration = 60.0  # 动画总时长（秒）
+        self.animation_time_step = 1.0  # 时间步长（秒）
+        self.original_target_positions = {}  # 保存目标初始位置
+        self.is_animating = False  # 是否正在动画
+
+        # 画布和绘图视图（在二级页面中使用）
+        self.canvas = None
+        self.plot_view = None
 
     
 
     def update_buttons_based_on_mode(self):
-        """根据模式更新按钮状态"""
-        if self.multi_target_mode:
-            # 多目标模式：禁用单目标按钮，启用多目标按钮
-            self.loop_button.setEnabled(False)
-            self.pso_button.setEnabled(False)
-            self.multi_target_button.setEnabled(True)
-            self.mopso_button.setEnabled(True)
-            
-            # 更新提示信息
-            self.loop_button.setToolTip("多目标模式下不可用，请使用'多目标SSL构建'或'多目标MOPSO优化'")
-            self.pso_button.setToolTip("多目标模式下不可用，请使用'多目标SSL构建'或'多目标MOPSO优化'")
-            self.multi_target_button.setToolTip("为所有目标构建杀伤链")
-            self.mopso_button.setToolTip("使用MOPSO算法优化多目标杀伤链")
-        else:
-            # 单目标模式：启用单目标按钮，禁用多目标按钮
-            self.loop_button.setEnabled(True)
-            self.pso_button.setEnabled(True)
-            self.multi_target_button.setEnabled(False)
-            self.mopso_button.setEnabled(False)
-            
-            # 更新提示信息
-            self.loop_button.setToolTip("使用'遍历搜索'方法寻找最优杀伤链")
-            self.pso_button.setToolTip("使用'粒子群算法'寻找最优杀伤链")
-            self.multi_target_button.setToolTip("单目标模式下不可用，请先添加多个目标节点")
-            self.mopso_button.setToolTip("单目标模式下不可用，请先添加多个目标节点")
+        """根据模式更新按钮状态（主页面按钮已移除，此方法保留用于兼容性）"""
+        # 主页面已移除算法按钮，所有算法功能都在二级页面提供
+        # 此方法保留用于兼容性，实际按钮状态在二级页面中管理
+        pass
 
 
     def show_initial_nodes(self):
@@ -658,6 +623,10 @@ class SSLApp(QtWidgets.QMainWindow):
 
             # 更新按钮状态
             self.update_buttons_based_on_mode()
+
+            # 显示控制面板和画布
+            self.control_panel.setVisible(True)
+            self.canvas.setVisible(True)
 
             # 显示节点
             self.show_initial_nodes()
@@ -1610,3 +1579,171 @@ class SSLApp(QtWidgets.QMainWindow):
         table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         
         return table
+
+    # =========================================================================
+    # 动目标动画功能
+    # =========================================================================
+
+    def start_moving_target_animation(self):
+        """
+        启动动目标动画。
+        
+        在SSL构建过程中，让可动目标按照速度移动，并实时刷新方案。
+        """
+        # 获取所有目标
+        all_targets = self.get_all_targets() if self.multi_target_mode else None
+        if not all_targets and not self.target_nodes:
+            QtWidgets.QMessageBox.warning(self, "提示", "没有目标节点")
+            return
+        
+        targets_to_check = all_targets if all_targets else {
+            t['id']: t for t in self.target_nodes
+        }
+        
+        # 检查是否有可动目标（有速度的目标）
+        has_movable = False
+        for tid, target in targets_to_check.items():
+            vx = target.get('vx', 0) or 0
+            vy = target.get('vy', 0) or 0
+            vh = target.get('vh', 0) or 0
+            if vx != 0 or vy != 0 or vh != 0:
+                has_movable = True
+                break
+        
+        if not has_movable:
+            QtWidgets.QMessageBox.information(self, "提示", "没有可动目标（vx/vy/vh均为0）")
+            return
+        
+        # 保存初始位置（如果还没有保存）
+        if not hasattr(self, 'original_target_positions') or not self.original_target_positions:
+            self.original_target_positions = {}
+            for tid, target in targets_to_check.items():
+                self.original_target_positions[tid] = target['coord']
+        
+        # 创建动画定时器
+        self.animation_timer = QtCore.QTimer(self)
+        self.animation_timer.timeout.connect(self._animation_step)
+        
+        # 初始化动画状态
+        self.animation_start_time = 0.0
+        self.is_animating = True
+        
+        # 更新按钮状态
+        self.animate_button.setEnabled(False)
+        self.stop_animate_button.setEnabled(True)
+        if hasattr(self, 'reset_animate_button'):
+            self.reset_animate_button.setEnabled(False)
+        
+        # 启动动画
+        self.animation_timer.start(int(self.animation_time_step * 1000))  # 转换为毫秒
+        
+        QtWidgets.QMessageBox.information(
+            self, "动画启动", 
+            f"动目标动画已启动\n时长: {self.animation_duration:.0f}秒\n时间步长: {self.animation_time_step:.1f}秒"
+        )
+
+    def _animation_step(self):
+        """动画单步执行"""
+        from algorithms import update_all_positions
+        
+        # 检查是否结束
+        if self.animation_start_time > self.animation_duration:
+            self.stop_moving_target_animation()
+            return
+        
+        # 获取当前目标
+        if self.multi_target_mode:
+            all_targets = self.get_all_targets()
+        else:
+            all_targets = {t['id']: t for t in self.target_nodes}
+        
+        # 获取节点配置（用于update_all_positions的nodes参数）
+        try:
+            nodes = self.get_nodes_dict()
+        except ValueError:
+            nodes = {'recon': {}, 'command': {}, 'fire': {}}
+        
+        # 更新目标位置（正确传入参数：targets, nodes, time_elapsed）
+        updated_targets, _ = update_all_positions(all_targets, nodes, self.animation_time_step, update_nodes=False)
+        
+        # 更新时间
+        self.animation_start_time += self.animation_time_step
+        
+        # 更新UI中的目标位置
+        self._update_target_positions_in_ui(updated_targets)
+        
+        # 重新运行算法（根据当前模式）
+        self._rebuild_ssl_with_moving_targets(updated_targets)
+        
+        # 刷新显示
+        self.show_initial_nodes()
+
+    def _update_target_positions_in_ui(self, updated_targets):
+        """更新UI中的目标位置"""
+        if self.multi_target_mode:
+            # 多目标模式：更新_last_multi_targets
+            for tid, target in updated_targets.items():
+                if tid in self._last_multi_targets:
+                    self._last_multi_targets[tid]['coord'] = target['coord']
+        else:
+            # 单目标模式：更新target_nodes
+            for node in self.target_nodes:
+                tid = node['id']
+                if tid in updated_targets:
+                    node['coord'] = updated_targets[tid]['coord']
+
+    def _rebuild_ssl_with_moving_targets(self, updated_targets):
+        """使用更新后的目标位置重新构建SSL"""
+        try:
+            # 获取节点配置
+            nodes = self.get_nodes_dict()
+            
+            # 获取弹目偏好表
+            preference_table = self.get_fire_target_preference_table()
+            
+            if self.multi_target_mode:
+                # 多目标模式
+                self.current_result = self.algorithm_service.build_multi_target_ssl(
+                    updated_targets, nodes, preference_table
+                )
+            else:
+                # 单目标模式
+                all_nodes = self.get_all_nodes_list()
+                self.current_result = self.algorithm_service.run_loop(all_nodes, nodes)
+                
+        except Exception as e:
+            print(f"重建SSL失败: {e}")
+
+    def stop_moving_target_animation(self):
+        """停止动目标动画"""
+        if self.animation_timer:
+            self.animation_timer.stop()
+            self.animation_timer = None
+        
+        self.is_animating = False
+        
+        # 更新按钮状态
+        self.animate_button.setEnabled(True)
+        self.stop_animate_button.setEnabled(False)
+        
+        # 恢复初始位置
+        self._restore_original_positions()
+        
+        QtWidgets.QMessageBox.information(self, "动画结束", "动目标动画已结束，目标位置已恢复")
+
+    def _restore_original_positions(self):
+        """恢复目标初始位置"""
+        if not self.original_target_positions:
+            return
+        
+        if self.multi_target_mode:
+            for tid, coord in self.original_target_positions.items():
+                if tid in self._last_multi_targets:
+                    self._last_multi_targets[tid]['coord'] = coord
+        else:
+            for node in self.target_nodes:
+                tid = node['id']
+                if tid in self.original_target_positions:
+                    node['coord'] = self.original_target_positions[tid]
+        
+        self.show_initial_nodes()

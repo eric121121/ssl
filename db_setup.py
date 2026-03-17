@@ -12,7 +12,7 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 	创建 MySQL 数据库 `ssl_3` 及其全部表结构。
 	
 	内容包括 7 张业务表，并在节点表中加入 scheme_id 字段。
-	若 test_mode=True，则会自动写入多套测试方案数据（营级/团级/旅级等）。
+	若 test_mode=True，则会自动写入多套测试方案数据（包含动目标方案）。
 	
 	参数：
 		db_config: 数据库配置字典
@@ -20,7 +20,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 	"""
 
 	# 单次连接：先创建数据库，再切换到该库执行后续操作
-	# 这里使用的是“裸连接”，因为此时数据库可能尚未创建，无法直接指定 schema。
 	db_name = db_config.get("database", "ssl_3")
 	conn = pymysql.connect(
 		host=db_config.get("host", "127.0.0.1"),
@@ -31,7 +30,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 		autocommit=True,
 	)
 	with conn.cursor() as cur:
-		# MySQL 在首次连接时默认使用 `mysql` 数据库，这里显式创建目标库，防止重复运行报错。
 		cur.execute(
 			f"CREATE DATABASE IF NOT EXISTS `{db_name}` "
 			"DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
@@ -40,7 +38,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 	try:
 		with conn.cursor() as cur:
 			# 先删除所有表以避免结构冲突
-			# 在测试模式下会重复执行脚本，因此先 drop 确保表结构和约束完全按脚本定义。
 			if test_mode:
 				cur.execute("DROP TABLE IF EXISTS `scheme_master`")
 			cur.execute("DROP TABLE IF EXISTS `fire_target_preference`")
@@ -51,7 +48,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 			cur.execute("DROP TABLE IF EXISTS `ammo_data`")
 			
 			# 测试模式：创建方案主表
-			# scheme_master 控制“方案”维度，支持批量插入不同战场场景，便于切换数据。
 			if test_mode:
 				cur.execute("""
 					CREATE TABLE `scheme_master` (
@@ -64,7 +60,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 				""")
 
 			# 1、弹药数据表
-			# 保存不同弹药的性能参数，供后续算法进行成本、反应时间等指标计算。
 			cur.execute(
 				"""
 				CREATE TABLE `ammo_data` (
@@ -83,7 +78,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 			)
 
 			# 2、侦察节点表
-			# 在测试模式下，每条节点记录会附带一个 scheme_id，以便区分不同方案的节点集。
 			scheme_id_field = "`scheme_id`        CHAR(36)     NOT NULL COMMENT '方案内码（GUID）',\n\t\t\t\t" if test_mode else ""
 			scheme_id_index = ", INDEX `idx_scheme_id` (`scheme_id`)" if test_mode else ""
 			cur.execute(f"""
@@ -107,7 +101,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 			""")
 
 			# 3、指挥节点表
-			# 指挥节点在多目标模式下需要记录指挥容量，只有在测试模式才会开启该虚拟字段。
 			scheme_id_field = "`scheme_id`        CHAR(36)     NOT NULL COMMENT '方案内码（GUID）',\n\t\t\t\t" if test_mode else ""
 			scheme_id_index = ", INDEX `idx_scheme_id` (`scheme_id`)" if test_mode else ""
 			command_capacity_field = ", `command_capacity` INT NOT NULL COMMENT '指挥容量（最大同时指挥目标数）'" if test_mode else ""
@@ -130,7 +123,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 			""")
 
 			# 4、火力节点表
-			# 火力节点保存射程、通信距离等信息，供算法判断可达性和响应时间。
 			scheme_id_field = "`scheme_id`        CHAR(36)     NOT NULL COMMENT '方案内码（GUID）',\n\t\t\t\t" if test_mode else ""
 			scheme_id_index = ", INDEX `idx_scheme_id` (`scheme_id`)" if test_mode else ""
 			cur.execute(f"""
@@ -153,7 +145,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 			""")
 
 			# 5、目标节点表
-			# 目标节点记录威胁度等指标，是多目标调度与评估的核心数据来源。
 			scheme_id_field = "`scheme_id`        CHAR(36)     NOT NULL COMMENT '方案内码（GUID）',\n\t\t\t\t" if test_mode else ""
 			scheme_id_index = ", INDEX `idx_scheme_id` (`scheme_id`)" if test_mode else ""
 			cur.execute(f"""
@@ -174,7 +165,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 			""")
 
 			# 6、弹目偏好表
-			# 通过弹目偏好矩阵驱动算法倾向于更合理的配对，例如导弹优先攻击高价值目标。
 			cur.execute(
 				"""
 				CREATE TABLE `fire_target_preference` (
@@ -187,7 +177,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 			)
 
 			# 插入弹药数据表初始数据
-			# 该数据集覆盖不同成本、射程、反应时间的典型弹药，便于测试算法的多样性。
 			ammo_data = [
 				('迫击炮', 30, 8, 18, 0, 2.5, 120, 200.00),
 				('子弹', 1.5, 8, 16, 0, 1.5, 76, 1.00),
@@ -202,7 +191,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 			]
 			
 			cur.executemany(
-				# executemany 能够一次性写入多行数据，效率远高于逐条 INSERT。
 				"""
 				INSERT INTO ammo_data (ammo_type, precision_value, ammo_count, max_range, damage_radius, conversion_coeff, flight_time, cost)
 				VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -211,9 +199,7 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 			)
 
 			# 插入弹目偏好表初始数据
-			# preference_rank 数值越小权重越大，体现火力平台对不同目标的消灭优先级。
 			preference_data = [
-				# 导弹发射车偏好
 				('导弹发射车', '主战坦克', 1),
 				('导弹发射车', '指挥所/坚固点', 2),
 				('导弹发射车', '车队/纵列', 2),
@@ -223,7 +209,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 				('导弹发射车', '雷达站', 1),
 				('导弹发射车', '机场设施', 1),
 				('导弹发射车', '通信中心', 1),
-				# 火炮偏好
 				('火炮', '主战坦克', 3),
 				('火炮', '指挥所/坚固点', 2),
 				('火炮', '车队/纵列', 1),
@@ -233,7 +218,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 				('火炮', '雷达站', 3),
 				('火炮', '机场设施', 2),
 				('火炮', '通信中心', 2),
-				# 反坦克导弹车偏好
 				('反坦克导弹车', '主战坦克', 1),
 				('反坦克导弹车', '指挥所/坚固点', 3),
 				('反坦克导弹车', '车队/纵列', 2),
@@ -243,7 +227,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 				('反坦克导弹车', '雷达站', 4),
 				('反坦克导弹车', '机场设施', 3),
 				('反坦克导弹车', '通信中心', 3),
-				# 防空导弹车偏好
 				('防空导弹车', '主战坦克', 4),
 				('防空导弹车', '指挥所/坚固点', 3),
 				('防空导弹车', '车队/纵列', 3),
@@ -253,7 +236,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 				('防空导弹车', '雷达站', 2),
 				('防空导弹车', '机场设施', 1),
 				('防空导弹车', '通信中心', 2),
-				# 火箭炮偏好
 				('火箭炮', '主战坦克', 3),
 				('火箭炮', '指挥所/坚固点', 2),
 				('火箭炮', '车队/纵列', 1),
@@ -263,7 +245,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 				('火箭炮', '雷达站', 3),
 				('火箭炮', '机场设施', 2),
 				('火箭炮', '通信中心', 2),
-				# 迫击炮偏好
 				('迫击炮', '主战坦克', 4),
 				('迫击炮', '指挥所/坚固点', 3),
 				('迫击炮', '车队/纵列', 2),
@@ -273,7 +254,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 				('迫击炮', '雷达站', 4),
 				('迫击炮', '机场设施', 3),
 				('迫击炮', '通信中心', 3),
-				# 狙击手偏好
 				('狙击手', '主战坦克', 4),
 				('狙击手', '指挥所/坚固点', 2),
 				('狙击手', '车队/纵列', 3),
@@ -283,7 +263,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 				('狙击手', '雷达站', 2),
 				('狙击手', '机场设施', 4),
 				('狙击手', '通信中心', 2),
-				# 攻击无人机偏好
 				('攻击无人机', '主战坦克', 2),
 				('攻击无人机', '指挥所/坚固点', 1),
 				('攻击无人机', '车队/纵列', 2),
@@ -296,7 +275,6 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 			]
 			
 			cur.executemany(
-				# 保持火力类型 + 目标类型唯一，可以在算法侧直接用 (fire_type, target_type) 作为查找键。
 				"""
 				INSERT INTO `fire_target_preference` (fire_type, target_type, preference_rank)
 				VALUES (%s, %s, %s)
@@ -304,8 +282,7 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 				preference_data
 			)
 
-			# 插入测试数据（包含多个方案）
-			# 有了前置基础数据之后，继续生成大量方案节点，方便 UI 直接加载演示数据。
+			# 插入测试数据（包含动目标方案）
 			if test_mode:
 				_insert_test_data(cur)
 
@@ -314,595 +291,344 @@ def create_database_and_tables(db_config: Dict[str, Any], test_mode: bool = True
 
 
 def _insert_test_data(cursor):
-	"""插入测试数据：8个场景化多目标方案和5个单目标演示方案"""
-	# 采用明确的 created_time 阶梯，保证列表展示时多目标与单目标分组顺序稳定。
+	"""插入测试数据：5个动目标多目标方案和5个动目标单目标方案"""
 	base_time = datetime.now()
-	multi_base_time = base_time - timedelta(minutes=5)
-	_insert_multi_target_scenarios(cursor, multi_base_time)
 	
-	# 添加单目标节点演示方案（5个，按节点总数区分）
-	single_base_time = base_time
-	_insert_single_target_demo_schemes(cursor, single_base_time)
+	# 插入5个动目标多目标方案
+	_insert_moving_target_multi_schemes(cursor, base_time)
+	
+	# 插入5个动目标单目标方案
+	_insert_moving_target_single_schemes(cursor, base_time + timedelta(minutes=5))
 
 
-def _insert_multi_target_scenarios(cursor, base_time: datetime):
-	"""插入8个手工场景化多目标方案。"""
-	scenarios = _get_multi_target_scenarios()
-	# 每套方案都内置多条侦察、指挥、火力、目标节点，通过随机抖动构造更真实的位置分布。
-	for idx, scenario in enumerate(scenarios):
+def _insert_moving_target_multi_schemes(cursor, base_time: datetime):
+	"""插入5个动目标多目标方案"""
+	schemes = _get_moving_target_multi_scenarios()
+	
+	for idx, scheme in enumerate(schemes):
 		scheme_id = str(uuid.uuid4())
-		created_time = base_time + timedelta(seconds=idx)  # 多目标分组时间略早
+		created_time = base_time + timedelta(seconds=idx)
+		
 		cursor.execute("""
 			INSERT INTO scheme_master (scheme_id, scheme_name, creator, created_time)
 			VALUES (%s, %s, %s, %s)
-		""", (scheme_id, scenario['name'], scenario['creator'], created_time))
+		""", (scheme_id, scheme['name'], scheme['creator'], created_time))
 		
-		# 通过 `_apply_node_jitter` 为不同节点添加轻微偏移，防止所有方案节点完全重合。
-		recon_entries = _apply_node_jitter(scenario['recon'], 1.6, 1.4, 1.5)
-		command_entries = _apply_node_jitter(scenario['command'], 0.9, 0.9, 0.7)
-		fire_entries = _apply_node_jitter(scenario['fire'], 1.3, 1.2, 1.0)
-		target_entries = _apply_node_jitter(scenario['targets'], 1.0, 1.0, 0.8)
-		
-		recon_nodes = [
-			(
-				scheme_id,
-				node_name,
-				model,
-				parallel_limit,
-				recon_range,
-				recon_precision,
-				processing_time,
-				x, y, h, 0, 0, 0
-			)
-			for (node_name, model, parallel_limit, recon_range, recon_precision, processing_time, x, y, h)
-			in recon_entries
-		]
-		
-		command_nodes = [
-			(
-				scheme_id,
-				node_name,
-				command_capacity,
-				comm_distance,
-				processing_time,
-				x, y, h, 0, 0, 0
-			)
-			for (node_name, command_capacity, comm_distance, processing_time, x, y, h)
-			in command_entries
-		]
-		
-		fire_nodes = [
-			(
-				scheme_id,
-				node_name,
-				fire_type,
-				ammo_type,
-				comm_distance,
-				processing_time,
-				x, y, h, 0, 0, 0
-			)
-			for (node_name, fire_type, ammo_type, comm_distance, processing_time, x, y, h)
-			in fire_entries
-		]
-		
-		target_nodes = [
-			(
-				scheme_id,
-				node_name,
-				target_type,
-				threat_level,
-				x, y, h, 0, 0, 0
-			)
-			for (node_name, target_type, threat_level, x, y, h)
-			in target_entries
-		]
-		
-		# 分四类节点批量写入，提高效率并保持事务一致性。
-		_insert_nodes_batch(cursor, recon_nodes, command_nodes, fire_nodes, target_nodes)
+		# 插入各类节点
+		_insert_scheme_nodes(cursor, scheme_id, scheme)
 
 
-def _get_multi_target_scenarios():
-	"""构建多目标方案库，每套方案代表一种典型战场情景。"""
-	return [{'command': [('沿岸联指A', 8, 18.0, 3.2, 18.5, 30.8, 1.0),
-	              ('机动指挥A', 6, 15.5, 3.8, 17.2, 29.5, 0.6),
-	              ('预备指挥A', 5, 13.0, 4.1, 16.8, 32.0, 0.6)],
-	  'creator': '张三',
-	  'fire': [('岸防导弹A', '导弹发射车', '导弹', 24.0, 7.5, 10.2, 30.6, 0.5),
-	           ('野战火炮A', '火炮', '榴弹炮', 20.0, 6.8, 9.1, 28.5, 0.4),
-	           ('火箭炮旅A', '火箭炮', '火箭弹', 22.0, 9.0, 10.8, 26.8, 0.5),
-	           ('机动反坦克A', '反坦克导弹车', '反坦克导弹', 16.5, 5.5, 8.5, 27.9, 0.6),
-	           ('无人机打击A', '攻击无人机', '精确制导炸弹', 15.0, 3.5, 9.3, 29.8, 2.5),
-	           ('迫击炮阵A', '迫击炮', '迫击炮', 12.0, 5.0, 8.8, 25.6, 0.3)],
-	  'name': '方案一-沿海梯次防御',
-	  'recon': [('梯次卫星A', '卫星侦察', 40, 24.0, 1.8, 2.5, 25.8, 33.6, 5.0),
-	            ('沿岸雷达A', '地面雷达', 20, 12.0, 2.4, 1.0, 24.2, 32.0, 1.2),
-	            ('沿岸光电A', '光电无人机', 6, 10.5, 1.2, 4.8, 23.7, 30.2, 0.5),
-	            ('山地哨所A', '地面雷达', 18, 11.0, 2.1, 1.2, 24.8, 34.2, 1.1),
-	            ('高空雷达A', '雷达无人机', 12, 14.0, 1.6, 4.0, 24.5, 31.0, 3.0)],
-	  'targets': [('敌海岸炮位A', '炮兵阵地', 3, 34.8, 33.2, 0.5),
-	              ('敌指控节点A', '通信中心', 4, 35.6, 32.0, 1.0),
-	              ('敌机场A', '机场设施', 5, 36.4, 34.0, 0.0),
-	              ('敌装甲纵队A', '主战坦克', 3, 33.5, 30.2, 0.0),
-	              ('敌补给点A', '车队/纵列', 2, 32.8, 31.6, 0.0),
-	              ('敌防空A', '防空阵地', 4, 35.0, 29.5, 0.0)]},
-	 {'command': [('都市联指U', 8, 17.0, 3.3, 17.0, 27.2, 1.0),
-	              ('机动指挥U', 6, 14.5, 3.6, 15.8, 25.5, 0.6),
-	              ('空地协调U', 5, 15.0, 3.4, 16.5, 28.0, 1.2)],
-	  'creator': '李四',
-	  'fire': [('城市防空U', '防空导弹车', '防空导弹', 19.0, 4.8, 9.5, 28.0, 0.8),
-	           ('重炮阵地U', '火炮', '榴弹炮', 18.5, 6.5, 8.2, 26.0, 0.5),
-	           ('火箭支援U', '火箭炮', '火箭弹', 20.0, 8.0, 10.0, 24.5, 0.7),
-	           ('机动反坦克U', '反坦克导弹车', '反坦克导弹', 15.0, 5.0, 7.8, 23.8, 0.5),
-	           ('无人机打击U', '攻击无人机', '精确制导炸弹', 14.0, 3.2, 9.0, 25.5, 2.0),
-	           ('迫击阵地U', '迫击炮', '迫击炮', 11.0, 4.6, 8.8, 22.5, 0.3)],
-	  'name': '方案二-城市纵深封锁',
-	  'recon': [('城区卫星U', '卫星侦察', 40, 22.0, 1.7, 2.2, 24.8, 27.5, 5.5),
-	            ('城区雷达U', '地面雷达', 18, 11.5, 2.2, 1.1, 23.0, 26.5, 1.1),
-	            ('城区光电U', '光电无人机', 6, 9.0, 1.0, 4.2, 22.5, 24.8, 0.6),
-	            ('监听分队U', '声学侦察', 10, 6.5, 2.6, 2.2, 23.5, 25.8, 0.3),
-	            ('高空雷达U', '雷达无人机', 12, 14.0, 1.6, 3.4, 24.0, 28.8, 4.0)],
-	  'targets': [('敌通信塔U', '通信中心', 3, 31.2, 27.5, 0.0),
-	              ('敌指挥楼U', '指挥所/坚固点', 4, 32.0, 26.2, 0.0),
-	              ('敌机场跑道U', '机场设施', 5, 33.5, 28.5, 0.0),
-	              ('敌装甲突击U', '主战坦克', 3, 30.5, 24.8, 0.0),
-	              ('敌防空阵地U', '防空阵地', 4, 31.8, 29.2, 0.0),
-	              ('敌补给仓储U', '车队/纵列', 2, 30.2, 25.8, 0.0)]},
-	 {'command': [('山前联指M', 7, 17.0, 3.2, 17.8, 30.5, 1.0),
-	              ('高机动指挥M', 6, 15.0, 3.5, 16.5, 28.8, 0.8),
-	              ('旅前指挥M', 5, 13.0, 3.8, 17.0, 32.0, 0.7)],
-	  'creator': '王五',
-	  'fire': [('高原导弹M', '导弹发射车', '导弹', 24.0, 7.8, 10.5, 31.0, 0.6),
-	           ('山地火炮M', '火炮', '榴弹炮', 19.0, 6.4, 9.0, 29.0, 0.5),
-	           ('火箭炮M', '火箭炮', '火箭弹', 21.0, 8.5, 10.2, 27.5, 0.7),
-	           ('反坦克伏击M', '反坦克导弹车', '反坦克导弹', 15.5, 5.2, 8.2, 26.5, 0.4),
-	           ('无人机打击M', '攻击无人机', '精确制导炸弹', 14.5, 3.4, 9.5, 28.2, 2.0),
-	           ('迫击阵地M', '迫击炮', '迫击炮', 11.5, 4.8, 8.0, 25.2, 0.3)],
-	  'name': '方案三-山谷楔形突击',
-	  'recon': [('山谷卫星M', '卫星侦察', 45, 23.0, 1.7, 2.0, 26.5, 31.5, 6.5),
-	            ('山口雷达M', '地面雷达', 22, 11.5, 2.2, 1.1, 25.0, 30.0, 1.5),
-	            ('峡谷雷达M', '地面雷达', 20, 10.8, 2.0, 1.0, 24.2, 28.5, 1.2),
-	            ('高空无人M', '雷达无人机', 12, 14.0, 1.6, 4.0, 25.5, 32.0, 3.5),
-	            ('山口光电M', '光电无人机', 6, 9.5, 1.1, 4.5, 23.5, 29.2, 0.6),
-	            ('前沿侦听M', '声学侦察', 10, 6.2, 2.7, 2.0, 22.8, 27.8, 0.4)],
-	  'targets': [('敌山口防空M', '防空阵地', 4, 33.0, 31.5, 0.0),
-	              ('敌山谷指挥M', '指挥所/坚固点', 4, 34.0, 30.2, 0.0),
-	              ('敌补给洞库M', '通信中心', 3, 32.5, 28.0, 0.0),
-	              ('敌装甲穿插M', '装甲运兵车', 3, 31.0, 27.0, 0.0),
-	              ('敌远程火力M', '炮兵阵地', 4, 34.5, 32.5, 0.0)]},
-	 {'command': [('沙漠联指D', 8, 18.0, 3.0, 17.2, 26.8, 0.8),
-	              ('机动指挥D', 6, 15.0, 3.4, 16.0, 25.0, 0.6),
-	              ('空地协调D', 5, 14.0, 3.2, 17.8, 28.0, 1.0)],
-	  'creator': '赵六',
-	  'fire': [('远程导弹D', '导弹发射车', '导弹', 25.0, 8.0, 10.8, 27.5, 0.5),
-	           ('重炮营D', '火炮', '榴弹炮', 20.0, 6.2, 9.5, 26.0, 0.4),
-	           ('火箭营D', '火箭炮', '火箭弹', 22.0, 8.7, 11.2, 24.8, 0.6),
-	           ('机动反坦克D', '反坦克导弹车', '反坦克导弹', 16.5, 5.0, 8.5, 24.0, 0.4),
-	           ('迫击炮D', '迫击炮', '迫击炮', 12.0, 4.8, 9.0, 22.5, 0.3),
-	           ('无人打击D', '攻击无人机', '精确制导炸弹', 15.0, 3.3, 9.8, 23.8, 2.0)],
-	  'name': '方案四-沙漠列阵截击',
-	  'recon': [('沙漠卫星D', '卫星侦察', 45, 24.0, 1.7, 2.1, 25.2, 27.5, 6.0),
-	            ('长航无人D', '雷达无人机', 12, 15.0, 1.5, 3.5, 24.0, 26.0, 3.0),
-	            ('机动雷达D', '地面雷达', 20, 11.0, 2.0, 1.2, 22.5, 25.0, 1.0),
-	            ('前沿监听D', '声学侦察', 12, 6.5, 2.6, 2.0, 23.0, 24.0, 0.4),
-	            ('低空光电D', '光电无人机', 6, 9.5, 1.1, 4.3, 24.5, 25.8, 0.6)],
-	  'targets': [('敌补给枢纽D', '车队/纵列', 3, 31.0, 27.8, 0.0),
-	              ('敌油料库D', '通信中心', 3, 32.2, 26.5, 0.0),
-	              ('敌沙漠机场D', '机场设施', 5, 33.5, 28.5, 0.0),
-	              ('敌装甲掩体D', '主战坦克', 3, 30.5, 25.0, 0.0),
-	              ('敌远程火力D', '炮兵阵地', 4, 34.0, 27.2, 0.0)]},
-	 {'command': [('沿海联指I', 8, 18.5, 3.1, 17.5, 30.8, 1.0),
-	              ('两栖指挥I', 6, 16.0, 3.6, 16.2, 28.8, 0.8),
-	              ('空海协调I', 6, 15.0, 3.2, 17.0, 32.0, 0.9)],
-	  'creator': '钱七',
-	  'fire': [('岸防导弹I', '导弹发射车', '导弹', 24.5, 7.6, 10.2, 31.0, 0.5),
-	           ('舰炮支援I', '火炮', '榴弹炮', 19.5, 6.5, 9.0, 29.0, 0.4),
-	           ('远程火箭I', '火箭炮', '火箭弹', 22.0, 8.5, 11.0, 27.5, 0.6),
-	           ('直升机打击I', '攻击无人机', '精确制导炸弹', 15.0, 3.3, 8.5, 26.0, 2.3),
-	           ('机动反舰I', '反坦克导弹车', '反坦克导弹', 17.0, 5.0, 9.8, 25.0, 0.5),
-	           ('迫击阵地I', '迫击炮', '迫击炮', 12.5, 4.8, 8.2, 24.0, 0.3)],
-	  'name': '方案五-岛链阻击阵',
-	  'recon': [('岛链卫星I', '卫星侦察', 45, 25.0, 1.8, 2.0, 25.5, 31.0, 5.5),
-	            ('远岸雷达I', '地面雷达', 22, 12.0, 2.2, 1.1, 24.2, 29.8, 1.3),
-	            ('岛屿光电I', '光电无人机', 6, 10.0, 1.1, 4.8, 23.0, 28.5, 0.6),
-	            ('舰载无人I', '雷达无人机', 12, 14.5, 1.5, 3.8, 24.8, 31.5, 3.0),
-	            ('沿岸声侦I', '声学侦察', 10, 6.2, 2.7, 2.2, 23.5, 27.5, 0.4)],
-	  'targets': [('敌登陆舰队I', '车队/纵列', 3, 32.5, 31.0, 0.0),
-	              ('敌临时指挥I', '指挥所/坚固点', 4, 33.8, 29.8, 0.0),
-	              ('敌海岸炮I', '炮兵阵地', 4, 35.0, 31.8, 0.0),
-	              ('敌机场跑道I', '机场设施', 5, 36.0, 33.2, 0.0),
-	              ('敌防空节点I', '防空阵地', 4, 33.0, 28.5, 0.0)]},
-	 {'command': [('高原防空指挥H', 9, 20.0, 3.5, 18.2, 32.0, 1.2),
-	              ('机动指挥H', 6, 16.5, 3.3, 17.0, 30.0, 0.9),
-	              ('空防协调H', 6, 15.0, 3.2, 17.8, 33.0, 1.0)],
-	  'creator': '孙八',
-	  'fire': [('远程导弹H', '导弹发射车', '导弹', 26.0, 8.0, 11.2, 33.2, 0.6),
-	           ('重炮群H', '火炮', '榴弹炮', 20.5, 6.6, 10.0, 31.0, 0.5),
-	           ('火箭旅H', '火箭炮', '火箭弹', 22.5, 8.6, 11.8, 29.5, 0.7),
-	           ('防空导弹H', '防空导弹车', '防空导弹', 19.0, 5.0, 10.5, 28.0, 0.8),
-	           ('无人打击H', '攻击无人机', '精确制导炸弹', 15.5, 3.3, 9.0, 30.0, 2.2),
-	           ('反坦克机动H', '反坦克导弹车', '反坦克导弹', 16.0, 5.1, 9.8, 27.2, 0.5),
-	           ('迫击炮H', '迫击炮', '迫击炮', 12.0, 4.9, 8.8, 26.0, 0.3)],
-	  'name': '方案六-高原屏障防空',
-	  'recon': [('高原卫星H', '卫星侦察', 50, 23.5, 1.7, 2.0, 26.2, 33.5, 7.0),
-	            ('高原雷达H', '地面雷达', 24, 12.5, 2.3, 1.1, 25.0, 32.0, 2.0),
-	            ('高空无人H', '雷达无人机', 12, 15.0, 1.5, 3.6, 24.0, 30.5, 3.8),
-	            ('山前雷达H', '地面雷达', 22, 11.0, 2.1, 1.0, 24.5, 34.2, 1.5),
-	            ('红外侦察H', '光电无人机', 6, 9.8, 1.1, 4.4, 23.2, 29.5, 0.6),
-	            ('前沿监听H', '声学侦察', 12, 6.3, 2.6, 2.1, 22.5, 28.2, 0.4)],
-	  'targets': [('敌高原雷达H', '雷达站', 4, 34.2, 33.5, 0.0),
-	              ('敌指挥洞室H', '指挥所/坚固点', 4, 35.5, 32.0, 0.0),
-	              ('敌远程炮阵H', '炮兵阵地', 4, 36.2, 34.5, 0.0),
-	              ('敌防空阵地H', '防空阵地', 4, 34.8, 30.8, 0.0),
-	              ('敌机场H', '机场设施', 5, 37.0, 33.0, 0.0),
-	              ('敌补给站H', '通信中心', 3, 33.5, 29.5, 0.0)]},
-	 {'command': [('集团军指挥B', 10, 22.0, 3.0, 18.5, 33.0, 1.5),
-	              ('空地协调B', 7, 16.5, 2.8, 17.0, 31.0, 1.0),
-	              ('快速指挥B', 6, 14.0, 3.5, 17.8, 34.0, 0.5)],
-	  'creator': '周八',
-	  'fire': [('远程导弹B', '导弹发射车', '导弹', 25.0, 8.5, 10.8, 34.2, 0.5),
-	           ('重炮营B', '火炮', '榴弹炮', 21.0, 6.5, 9.5, 32.0, 0.4),
-	           ('火箭炮B', '火箭炮', '火箭弹', 23.0, 8.8, 11.5, 30.5, 0.6),
-	           ('反装甲B', '反坦克导弹车', '反坦克导弹', 17.0, 5.2, 9.0, 29.0, 0.5),
-	           ('攻击无人机B', '攻击无人机', '精确制导炸弹', 16.0, 3.2, 10.2, 31.5, 2.0),
-	           ('防空打击B', '防空导弹车', '防空导弹', 18.0, 4.8, 9.5, 28.0, 0.8),
-	           ('迫击群B', '迫击炮', '迫击炮', 11.0, 4.5, 8.5, 27.0, 0.3)],
-	  'name': '方案七-纵深扇形围歼',
-	  'recon': [('高空雷达B', '雷达无人机', 14, 15.0, 1.5, 3.5, 26.5, 34.5, 4.5),
-	            ('低空光电B', '光电无人机', 6, 9.5, 1.1, 4.5, 25.0, 33.0, 0.6),
-	            ('地面雷达B1', '地面雷达', 25, 10.0, 2.0, 1.2, 24.0, 32.2, 0.8),
-	            ('地面雷达B2', '地面雷达', 25, 11.5, 2.2, 1.1, 25.8, 31.0, 0.8),
-	            ('声学侦察B', '声学侦察', 10, 6.0, 2.8, 2.0, 23.5, 30.0, 0.4),
-	            ('卫星侦察B', '卫星侦察', 50, 22.0, 1.9, 2.0, 27.0, 35.8, 6.0)],
-	  'targets': [('敌装甲指挥B', '指挥所/坚固点', 4, 34.8, 34.0, 0.0),
-	              ('敌机动补给B', '车队/纵列', 3, 35.5, 32.0, 0.0),
-	              ('敌长程火力B', '炮兵阵地', 4, 36.5, 33.5, 0.0),
-	              ('敌防空阵地B', '防空阵地', 4, 33.5, 31.0, 0.0),
-	              ('敌机场节点B', '机场设施', 5, 37.0, 34.8, 0.0),
-	              ('敌通信枢纽B', '通信中心', 3, 33.2, 29.5, 0.0),
-	              ('敌装步集群B', '装甲运兵车', 3, 32.0, 28.8, 0.0)]},
-	 {'command': [('渡口联指R', 8, 17.5, 3.1, 17.0, 30.0, 1.0),
-	              ('应急指挥R', 6, 15.0, 3.4, 16.0, 28.2, 0.7),
-	              ('火力协调R', 5, 14.0, 3.2, 17.5, 31.5, 0.9)],
-	  'creator': '吴九',
-	  'fire': [('远程导弹R', '导弹发射车', '导弹', 24.0, 7.8, 10.0, 30.8, 0.5),
-	           ('重炮群R', '火炮', '榴弹炮', 19.0, 6.4, 8.8, 29.0, 0.4),
-	           ('火箭营R', '火箭炮', '火箭弹', 21.5, 8.5, 11.2, 27.2, 0.6),
-	           ('反坦克R', '反坦克导弹车', '反坦克导弹', 15.5, 5.1, 8.2, 26.0, 0.4),
-	           ('无人机R', '攻击无人机', '精确制导炸弹', 14.5, 3.3, 9.5, 28.0, 2.0),
-	           ('迫击阵地R', '迫击炮', '迫击炮', 11.5, 4.7, 8.5, 25.0, 0.3)],
-	  'name': '方案八-渡口拦截网',
-	  'recon': [('河段卫星R', '卫星侦察', 45, 22.0, 1.8, 2.1, 24.2, 30.5, 5.5),
-	            ('河岸雷达R', '地面雷达', 20, 11.5, 2.2, 1.1, 23.0, 29.5, 1.2),
-	            ('桥头光电R', '光电无人机', 6, 9.8, 1.0, 4.5, 22.0, 28.2, 0.5),
-	            ('防渡无人R', '雷达无人机', 12, 14.0, 1.5, 3.6, 23.5, 31.0, 3.0),
-	            ('前沿监听R', '声学侦察', 10, 6.4, 2.6, 2.1, 21.8, 27.5, 0.3)],
-	  'targets': [('敌浮桥R', '车队/纵列', 3, 31.8, 31.0, 0.0),
-	              ('敌渡桥指挥R', '指挥所/坚固点', 4, 33.0, 29.8, 0.0),
-	              ('敌防空掩护R', '防空阵地', 4, 34.0, 31.2, 0.0),
-	              ('敌集结场R', '主战坦克', 3, 32.5, 28.5, 0.0),
-	              ('敌后方炮阵R', '炮兵阵地', 4, 35.2, 30.5, 0.0)]}]
-
-
-def _apply_node_jitter(entries, x_jitter, y_jitter, radial_jitter=0.0):
-	"""为节点坐标添加轻微扰动与径向散布，避免出现完全整齐的排列。"""
-	if x_jitter <= 0 and y_jitter <= 0 and radial_jitter <= 0:
-		return entries
-	jittered = []
-	for entry in entries:
-		head = entry[:-3]
-		x, y, h = entry[-3:]
-		# 先生成轴向扰动，再叠加随机方向的径向扰动，使点云分布更自然。
-		dx = random.uniform(-x_jitter, x_jitter) if x_jitter else 0
-		dy = random.uniform(-y_jitter, y_jitter) if y_jitter else 0
-		if radial_jitter > 0:
-			radius = random.uniform(0, radial_jitter)
-			theta = random.uniform(0, 2 * math.pi)
-			dx += math.cos(theta) * radius
-			dy += math.sin(theta) * radius
-		new_x = round(x + dx, 2)
-		new_y = round(y + dy, 2)
-		jittered.append((*head, new_x, new_y, h))
-	return jittered
-
-
-def _insert_nodes_batch(cursor, recon_nodes, command_nodes, fire_nodes, target_nodes):
-	"""批量插入节点数据"""
-	# executemany 顺序固定：侦察 -> 指挥 -> 火力 -> 目标，与 UI 展示顺序保持一致。
-	cursor.executemany("""
-		INSERT INTO reconnaissance_nodes (scheme_id, node_name, model, parallel_limit, recon_range, recon_precision, processing_time, x, y, h, vx, vy, vh)
-		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-	""", recon_nodes)
-	cursor.executemany("""
-		INSERT INTO command_nodes (scheme_id, node_name, command_capacity, comm_distance, processing_time, x, y, h, vx, vy, vh)
-		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-	""", command_nodes)
-	cursor.executemany("""
-		INSERT INTO firepower_nodes (scheme_id, node_name, firepower_type, ammo_type, comm_distance, processing_time, x, y, h, vx, vy, vh)
-		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-	""", fire_nodes)
-	cursor.executemany("""
-		INSERT INTO target_nodes (scheme_id, node_name, target_type, threat_level, x, y, h, vx, vy, vh)
-		VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-	""", target_nodes)
-
-
-def _generate_recon_nodes_by_count(count, scheme_id):
-	"""按指定数量生成侦察节点数据（前线部署）"""
-	recon_nodes = []
-	recon_types = [
-		('光电无人机', 4, (6, 12), (0.8, 1.5), (3, 8)),
-		('雷达无人机', 10, (8, 15), (1.2, 2.0), (4, 10)),
-		('地面雷达', 30, (5, 12), (3, 8), (0.5, 2)),
-		('卫星侦察', 50, (15, 25), (1.5, 3), (1, 3)),
-		('红外侦察', 8, (4, 8), (1.0, 2.5), (2, 6)),
-		('声学侦察', 15, (3, 6), (2, 5), (1, 4)),
-	]
-	for i in range(count):
-		# 通过 i % len(recon_types) 轮询模板，让任意数量的节点都能复用这套配置。
-		type_name, parallel_limit, range_bounds, precision_bounds, time_bounds = recon_types[i % len(recon_types)]
-		# 侦察节点位于战场前沿，x/y 坐标集中在正向区域。
-		x = round(random.uniform(2, 8), 2)
-		y = round(random.uniform(26, 32), 2)
-		recon_nodes.append((
-			scheme_id,
-			f'{type_name}{i+1}',
-			type_name,
-			parallel_limit,
-			round(random.uniform(*range_bounds), 2),
-			round(random.uniform(*precision_bounds), 2),
-			round(random.uniform(*time_bounds), 2),
-			x, y, 0, 0, 0, 0
-		))
-	return recon_nodes
-
-
-def _generate_single_recon_nodes(count, scheme_id):
-	"""单目标专用侦察节点，位置和射程保证覆盖目标，同时带随机偏移避免全同"""
-	recon_nodes = []
-	for i in range(count):
-		x = round(random.uniform(7.0, 10.0), 2)
-		y = round(random.uniform(29.5, 33.5), 2)
-		range_val = round(random.uniform(30.0, 36.0), 2)
-		recon_nodes.append((
-			scheme_id,
-			f'单目侦察{i+1}',
-			'光电无人机',
-			8,
-			range_val,  # 足够覆盖前方目标
-			round(random.uniform(0.8, 1.6), 2),
-			round(random.uniform(2.5, 5.0), 2),
-			x, y, 0, 0, 0, 0
-		))
-	return recon_nodes
-
-
-def _generate_command_nodes_by_count(count, scheme_id):
-	"""按指定数量生成指挥节点数据（纵深部署）"""
-	command_nodes = []
-	command_types = [
-		('主指挥所', (10, 12), (12, 20), (2, 5)),
-		('移动指挥车', (3, 5), (8, 15), (1.5, 4)),
-		('战术指挥中心', (6, 8), (10, 18), (3, 7)),
-		('空中指挥机', (8, 10), (15, 25), (1, 3)),
-		('前沿指挥所', (2, 4), (6, 12), (2, 5)),
-	]
-	for i in range(count):
-		type_name, capacity_bounds, comm_bounds, time_bounds = command_types[i % len(command_types)]
-		# 指挥节点通常部署在后方，因此 x 坐标大概率为负。
-		x = round(random.uniform(-8, -3), 2)
-		y = round(random.uniform(20, 26), 2)
-		command_nodes.append((
-			scheme_id,
-			f'{type_name}{i+1}',
-			random.randint(*capacity_bounds),
-			round(random.uniform(*comm_bounds), 2),
-			round(random.uniform(*time_bounds), 2),
-			x, y, 0, 0, 0, 0
-		))
-	return command_nodes
-
-
-def _generate_single_command_nodes(count, scheme_id):
-	"""单目标专用指挥节点，确保可同时联通侦察和火力，并带位置抖动"""
-	command_nodes = []
-	for i in range(count):
-		x = round(random.uniform(-2.5, 3.5), 2)
-		y = round(random.uniform(22.0, 28.0), 2)
-		comm_val = round(random.uniform(32.0, 38.0), 2)
-		command_nodes.append((
-			scheme_id,
-			f'单目指挥{i+1}',
-			8,
-			comm_val,  # 保证能覆盖侦察和火力
-			round(random.uniform(1.2, 3.5), 2),
-			x, y, 0, 0, 0, 0
-		))
-	return command_nodes
-
-
-def _generate_firepower_nodes_by_count(count, scheme_id):
-	"""按指定数量生成火力节点数据（大后方火力）"""
-	firepower_nodes = []
-	fire_types = [
-		('导弹发射车', '导弹发射车', '导弹', (15, 25), (6, 12)),
-		('火炮', '火炮', '榴弹炮', (15, 25), (8, 18)),
-		('反坦克导弹车', '反坦克导弹车', '反坦克导弹', (10, 18), (4, 10)),
-		('防空导弹车', '防空导弹车', '防空导弹', (12, 20), (5, 10)),
-		('火箭炮', '火箭炮', '火箭弹', (12, 20), (10, 20)),
-		('迫击炮', '迫击炮', '迫击炮', (8, 15), (5, 12)),
-		('狙击手', '狙击手', '子弹', (5, 10), (2, 6)),
-		('攻击无人机', '攻击无人机', '精确制导炸弹', (8, 15), (3, 8)),
-	]
-	for i in range(count):
-		type_name, fire_type, ammo_type, comm_bounds, time_bounds = fire_types[i % len(fire_types)]
-		# 火力节点离前线更远一些，坐标进一步偏向战场后方。
-		x = round(random.uniform(-12, -2), 2)
-		y = round(random.uniform(12, 20), 2)
-		firepower_nodes.append((
-			scheme_id,
-			f'{type_name}{i+1}',
-			fire_type,
-			ammo_type,
-			round(random.uniform(*comm_bounds), 2),
-			round(random.uniform(*time_bounds), 2),
-			x, y, 0, 0, 0, 0
-		))
-	return firepower_nodes
-
-
-def _generate_single_firepower_nodes(count, scheme_id):
-	"""单目标专用火力节点，位置后置但射程足够到达目标，同时增加多样性"""
-	firepower_nodes = []
-	for i in range(count):
-		x = round(random.uniform(-10.0, -3.0), 2)
-		y = round(random.uniform(14.0, 21.0), 2)
-		comm_val = round(random.uniform(38.0, 45.0), 2)
-		fire_type, ammo_type = random.choice([
-			('导弹发射车', '导弹'),
-			('反坦克导弹车', '反坦克导弹'),
-			('攻击无人机', '精确制导炸弹'),
-		])
-		firepower_nodes.append((
-			scheme_id,
-			f'单目火力{i+1}',
-			fire_type,
-			ammo_type,
-			comm_val,  # 覆盖至目标区
-			round(random.uniform(6.0, 10.0), 2),
-			x, y, 0, 0, 0, 0
-		))
-	return firepower_nodes
-
-
-def _generate_target_nodes_by_count(count, scheme_id):
-	"""按指定数量生成目标节点数据（敌纵深）"""
-	target_nodes = []
-	target_types = [
-		('敌方坦克', '主战坦克', (1, 2)),
-		('敌方指挥所', '指挥所/坚固点', (2, 3)),
-		('敌方车队', '车队/纵列', (2, 4)),
-		('敌方步兵', '轻步兵/散兵', (3, 5)),
-		('敌方装甲车', '装甲运兵车', (2, 3)),
-		('敌方炮兵阵地', '炮兵阵地', (2, 4)),
-		('敌方雷达站', '雷达站', (3, 4)),
-		('敌方机场', '机场设施', (4, 5)),
-		('敌方通信中心', '通信中心', (3, 4)),
-	]
-	for i in range(count):
-		name_prefix, target_type, threat_bounds = target_types[i % len(target_types)]
-		# 敌方目标分布在纵深区域，x/y 都偏向正向坐标。
-		x = round(random.uniform(7, 14), 2)
-		y = round(random.uniform(30, 36), 2)
-		target_nodes.append((
-			scheme_id,
-			f'{name_prefix}{i+1}',
-			target_type,
-			random.randint(*threat_bounds),
-			x, y, 0, 0, 0, 0
-		))
-	return target_nodes
-
-
-def _insert_single_target_demo_schemes(cursor, base_time: datetime):
-	"""插入单目标节点的演示方案（5个，节点数区分为10/20/30/40/50）"""
-	# 按节点总量构造五套单目标方案，保持与多目标列表分离，便于界面区分。
-	# 每套方案使用不同的空间偏移，避免坐标完全重叠。
-	scheme_offsets = [
-		(0.0, 0.0),
-		(1.2, -0.8),
-		(-1.0, 1.0),
-		(0.8, 1.5),
-		(-1.4, -1.2),
-	]
-	single_target_definitions = [
-		{
-			'name': '演示方案六-单目标10节点',
-			'creator': '演示员A',
-			'target': ('主战坦克', '敌方主战坦克', 1),
-			'counts': (3, 2, 4)  # recon, command, fire（再加1个目标=10）
-		},
-		{
-			'name': '演示方案七-单目标20节点',
-			'creator': '演示员B',
-			'target': ('指挥所/坚固点', '敌方指挥所', 2),
-			'counts': (6, 4, 9)  # +1目标=20
-		},
-		{
-			'name': '演示方案八-单目标30节点',
-			'creator': '演示员C',
-			'target': ('装甲运兵车', '敌方装甲车', 2),
-			'counts': (9, 6, 14)  # +1目标=30
-		},
-		{
-			'name': '演示方案九-单目标40节点',
-			'creator': '演示员D',
-			'target': ('通信中心', '敌方通信中心', 3),
-			'counts': (12, 8, 19)  # +1目标=40
-		},
-		{
-			'name': '演示方案十-单目标50节点',
-			'creator': '演示员E',
-			'target': ('机场设施', '敌方机场', 4),
-			'counts': (15, 10, 24)  # +1目标=50
-		},
-	]
+def _insert_moving_target_single_schemes(cursor, base_time: datetime):
+	"""插入5个动目标单目标方案"""
+	schemes = _get_moving_target_single_scenarios()
 	
-	# 插入方案主表，保持单目标方案列表排列独立。
-	scheme_master_rows = []
-	for idx, scheme in enumerate(single_target_definitions):
-		scheme['scheme_id'] = str(uuid.uuid4())
-		created_time = base_time + timedelta(seconds=idx)  # 单目标分组时间略晚
-		scheme_master_rows.append((scheme['scheme_id'], scheme['name'], scheme['creator'], created_time))
-	
-	cursor.executemany("""
-		INSERT INTO scheme_master (scheme_id, scheme_name, creator, created_time)
-		VALUES (%s, %s, %s, %s)
-	""", scheme_master_rows)
-	
-	# 为不同节点规模依次生成数据集
-	for idx, scheme in enumerate(single_target_definitions, start=6):
-		print(f"  生成演示方案{idx}({scheme['name']})...")
-		recon_count, command_count, fire_count = scheme['counts']
-		target_type, node_name, threat = scheme['target']
-		offset_x, offset_y = scheme_offsets[idx - 6]
+	for idx, scheme in enumerate(schemes):
+		scheme_id = str(uuid.uuid4())
+		created_time = base_time + timedelta(seconds=idx)
 		
-		def _offset_nodes(nodes_list, offset_x, offset_y):
-			return [
-				(
-					n[0],
-					n[1],
-					*n[2:-6],
-					round(n[-6] + offset_x, 2),
-					round(n[-5] + offset_y, 2),
-					*n[-4:]
-				)
-				for n in nodes_list
+		cursor.execute("""
+			INSERT INTO scheme_master (scheme_id, scheme_name, creator, created_time)
+			VALUES (%s, %s, %s, %s)
+		""", (scheme_id, scheme['name'], scheme['creator'], created_time))
+		
+		# 插入各类节点
+		_insert_scheme_nodes(cursor, scheme_id, scheme)
+
+
+def _get_moving_target_multi_scenarios():
+	"""获取5个动目标多目标方案配置 - 坐标范围：X: -40~40, Y: 5~45"""
+	return [
+		{
+			'name': '动目标方案一-沿海机动防御',
+			'creator': '张三',
+			'recon': [
+				# 侦察节点：X: -20~0, Y: 20~35
+				('沿岸雷达A', '地面雷达', 20, 12.0, 2.4, 1.0, -15.0, 30.0, 1.2, 0, 0, 0),
+				('沿岸光电A', '光电无人机', 6, 10.5, 1.2, 4.8, -10.0, 28.0, 0.5, 0, 0, 0),
+				('高空雷达A', '雷达无人机', 12, 14.0, 1.6, 4.0, -5.0, 32.0, 3.0, 0, 0, 0),
+			],
+			'command': [
+				# 指挥节点：X: -25~-10, Y: 15~25
+				('沿岸联指A', 8, 18.0, 3.2, -20.0, 22.0, 1.0, 0, 0, 0),
+				('机动指挥A', 6, 15.5, 3.8, -15.0, 20.0, 0.6, 0, 0, 0),
+			],
+			'fire': [
+				# 火力节点：X: -35~-20, Y: 10~20
+				('岸防导弹A', '导弹发射车', '导弹', 24.0, 7.5, -30.0, 18.0, 0.5, 0, 0, 0),
+				('野战火炮A', '火炮', '榴弹炮', 20.0, 6.8, -25.0, 15.0, 0.4, 0, 0, 0),
+				('火箭炮旅A', '火箭炮', '火箭弹', 22.0, 9.0, -22.0, 12.0, 0.5, 0, 0, 0),
+			],
+			'targets': [
+				# 目标节点：X: 10~35, Y: 25~40（在显示范围内移动）
+				# 动目标：vx=2, vy=1.5 (向右上方移动)
+				('敌海岸炮位A', '炮兵阵地', 3, 15.0, 30.0, 0.5, 2.0, 1.5, 0),
+				('敌指控节点A', '通信中心', 4, 20.0, 28.0, 1.0, 1.5, 2.0, 0),
+				('敌机场A', '机场设施', 5, 25.0, 35.0, 0.0, 0, 0, 0),  # 静止目标
+				('敌装甲纵队A', '主战坦克', 3, 18.0, 32.0, 0.0, 2.5, 1.0, 0),
+				('敌补给点A', '车队/纵列', 2, 22.0, 26.0, 0.0, 1.0, 2.5, 0),
 			]
-		
-		# 使用单目标专用的节点生成器，保证链路距离可达
-		recon_nodes = _offset_nodes(_generate_single_recon_nodes(recon_count, scheme['scheme_id']), offset_x, offset_y)
-		command_nodes = _offset_nodes(_generate_single_command_nodes(command_count, scheme['scheme_id']), offset_x, offset_y)
-		fire_nodes = _offset_nodes(_generate_single_firepower_nodes(fire_count, scheme['scheme_id']), offset_x, offset_y)
-		target_nodes = _generate_single_target_node(scheme['scheme_id'], target_type, node_name, threat)
-		_insert_nodes_batch(cursor, recon_nodes, command_nodes, fire_nodes, target_nodes)
+		},
+		{
+			'name': '动目标方案二-城市追击',
+			'creator': '李四',
+			'recon': [
+				('城区雷达U', '地面雷达', 18, 11.5, 2.2, 1.1, -18.0, 25.0, 1.1, 0, 0, 0),
+				('城区光电U', '光电无人机', 6, 9.0, 1.0, 4.2, -12.0, 22.0, 0.6, 0, 0, 0),
+				('高空雷达U', '雷达无人机', 12, 14.0, 1.6, 3.4, -8.0, 28.0, 4.0, 0, 0, 0),
+			],
+			'command': [
+				('都市联指U', 8, 17.0, 3.3, -22.0, 20.0, 1.0, 0, 0, 0),
+				('机动指挥U', 6, 14.5, 3.6, -16.0, 18.0, 0.6, 0, 0, 0),
+			],
+			'fire': [
+				('城市防空U', '防空导弹车', '防空导弹', 19.0, 4.8, -28.0, 16.0, 0.8, 0, 0, 0),
+				('重炮阵地U', '火炮', '榴弹炮', 18.5, 6.5, -24.0, 14.0, 0.5, 0, 0, 0),
+				('火箭支援U', '火箭炮', '火箭弹', 20.0, 8.0, -20.0, 12.0, 0.7, 0, 0, 0),
+			],
+			'targets': [
+				# 动目标：vx=-1.5, vy=2 (向左上方移动)
+				('敌通信塔U', '通信中心', 3, 30.0, 25.0, 0.0, -1.5, 2.0, 0),
+				('敌指挥楼U', '指挥所/坚固点', 4, 35.0, 22.0, 0.0, -2.0, 1.5, 0),
+				('敌机场跑道U', '机场设施', 5, 32.0, 30.0, 0.0, 0, 0, 0),  # 静止
+				('敌装甲突击U', '主战坦克', 3, 28.0, 20.0, 0.0, -2.5, 1.0, 0),
+				('敌防空阵地U', '防空阵地', 4, 25.0, 28.0, 0.0, -1.0, 2.5, 0),
+			]
+		},
+		{
+			'name': '动目标方案三-山谷拦截',
+			'creator': '王五',
+			'recon': [
+				('山谷雷达M', '地面雷达', 22, 11.5, 2.2, 1.1, -12.0, 32.0, 1.5, 0, 0, 0),
+				('峡谷雷达M', '地面雷达', 20, 10.8, 2.0, 1.0, -8.0, 30.0, 1.2, 0, 0, 0),
+				('高空无人M', '雷达无人机', 12, 14.0, 1.6, 4.0, -5.0, 35.0, 3.5, 0, 0, 0),
+			],
+			'command': [
+				('山前联指M', 7, 17.0, 3.2, -18.0, 28.0, 1.0, 0, 0, 0),
+				('高机动指挥M', 6, 15.0, 3.5, -14.0, 25.0, 0.8, 0, 0, 0),
+			],
+			'fire': [
+				('高原导弹M', '导弹发射车', '导弹', 24.0, 7.8, -32.0, 22.0, 0.6, 0, 0, 0),
+				('山地火炮M', '火炮', '榴弹炮', 19.0, 6.4, -26.0, 18.0, 0.5, 0, 0, 0),
+				('火箭炮M', '火箭炮', '火箭弹', 21.0, 8.5, -22.0, 15.0, 0.7, 0, 0, 0),
+			],
+			'targets': [
+				# 动目标：vx=2, vy=-1 (向右下方移动)
+				('敌山口防空M', '防空阵地', 4, 12.0, 38.0, 0.0, 2.0, -1.0, 0),
+				('敌山谷指挥M', '指挥所/坚固点', 4, 18.0, 35.0, 0.0, 1.5, -1.5, 0),
+				('敌补给洞库M', '通信中心', 3, 15.0, 32.0, 0.0, 0, 0, 0),  # 静止
+				('敌装甲穿插M', '装甲运兵车', 3, 20.0, 30.0, 0.0, 2.5, -0.5, 0),
+				('敌远程火力M', '炮兵阵地', 4, 25.0, 40.0, 0.0, 1.0, -2.0, 0),
+			]
+		},
+		{
+			'name': '动目标方案四-沙漠追击',
+			'creator': '赵六',
+			'recon': [
+				('沙漠雷达D', '地面雷达', 20, 11.0, 2.0, 1.2, -20.0, 20.0, 1.0, 0, 0, 0),
+				('长航无人D', '雷达无人机', 12, 15.0, 1.5, 3.5, -10.0, 25.0, 3.0, 0, 0, 0),
+				('低空光电D', '光电无人机', 6, 9.5, 1.1, 4.3, -15.0, 22.0, 0.6, 0, 0, 0),
+			],
+			'command': [
+				('沙漠联指D', 8, 18.0, 3.0, -25.0, 18.0, 0.8, 0, 0, 0),
+				('机动指挥D', 6, 15.0, 3.4, -18.0, 15.0, 0.6, 0, 0, 0),
+			],
+			'fire': [
+				('远程导弹D', '导弹发射车', '导弹', 25.0, 8.0, -35.0, 12.0, 0.5, 0, 0, 0),
+				('重炮营D', '火炮', '榴弹炮', 20.0, 6.2, -28.0, 10.0, 0.4, 0, 0, 0),
+				('火箭营D', '火箭炮', '火箭弹', 22.0, 8.7, -22.0, 8.0, 0.6, 0, 0, 0),
+			],
+			'targets': [
+				# 动目标：vx=-2, vy=-1.5 (向左下方移动)
+				('敌补给枢纽D', '车队/纵列', 3, 30.0, 20.0, 0.0, -2.0, -1.5, 0),
+				('敌油料库D', '通信中心', 3, 35.0, 18.0, 0.0, -1.5, -2.0, 0),
+				('敌沙漠机场D', '机场设施', 5, 32.0, 25.0, 0.0, 0, 0, 0),  # 静止
+				('敌装甲掩体D', '主战坦克', 3, 28.0, 15.0, 0.0, -2.5, -1.0, 0),
+				('敌远程火力D', '炮兵阵地', 4, 25.0, 22.0, 0.0, -1.0, -2.5, 0),
+			]
+		},
+		{
+			'name': '动目标方案五-岛链机动',
+			'creator': '钱七',
+			'recon': [
+				('岛链雷达I', '地面雷达', 22, 12.0, 2.2, 1.1, -8.0, 28.0, 1.3, 0, 0, 0),
+				('岛屿光电I', '光电无人机', 6, 10.0, 1.1, 4.8, -5.0, 25.0, 0.6, 0, 0, 0),
+				('舰载无人I', '雷达无人机', 12, 14.5, 1.5, 3.8, -2.0, 30.0, 3.0, 0, 0, 0),
+			],
+			'command': [
+				('沿海联指I', 8, 18.5, 3.1, -12.0, 24.0, 1.0, 0, 0, 0),
+				('两栖指挥I', 6, 16.0, 3.6, -8.0, 22.0, 0.8, 0, 0, 0),
+			],
+			'fire': [
+				('岸防导弹I', '导弹发射车', '导弹', 24.5, 7.6, -18.0, 20.0, 0.5, 0, 0, 0),
+				('舰炮支援I', '火炮', '榴弹炮', 19.5, 6.5, -15.0, 16.0, 0.4, 0, 0, 0),
+				('远程火箭I', '火箭炮', '火箭弹', 22.0, 8.5, -10.0, 12.0, 0.6, 0, 0, 0),
+			],
+			'targets': [
+				# 动目标：vx=1, vy=1.5 (向右上方缓慢移动)
+				('敌登陆舰队I', '车队/纵列', 3, 8.0, 32.0, 0.0, 1.0, 1.5, 0),
+				('敌临时指挥I', '指挥所/坚固点', 4, 15.0, 30.0, 0.0, 1.5, 1.0, 0),
+				('敌海岸炮I', '炮兵阵地', 4, 20.0, 35.0, 0.0, 0, 0, 0),  # 静止
+				('敌机场跑道I', '机场设施', 5, 25.0, 38.0, 0.0, 0.5, 1.0, 0),
+				('敌防空节点I', '防空阵地', 4, 12.0, 28.0, 0.0, 2.0, 0.5, 0),
+			]
+		},
+	]
 
 
-def _generate_single_target_node(scheme_id, target_type, node_name, threat_level):
-	"""生成单个目标节点"""
-	# 单目标演示也需要随机坐标，防止与其它方案出现重复点。
-	x = round(random.uniform(7.5, 12.5), 2)
-	y = round(random.uniform(31, 37), 2)
+def _get_moving_target_single_scenarios():
+	"""获取5个动目标单目标方案配置 - 坐标范围：X: -40~40, Y: 5~45"""
+	return [
+		{
+			'name': '动目标单方案一-追击坦克',
+			'creator': '演示员A',
+			'recon': [
+				('侦察无人机1', '光电无人机', 8, 35.0, 1.2, 3.5, -15.0, 25.0, 0.5, 0, 0, 0),
+				('地面雷达1', '地面雷达', 20, 30.0, 2.0, 1.5, -10.0, 28.0, 1.0, 0, 0, 0),
+			],
+			'command': [
+				('前线指挥所', 6, 35.0, 2.5, -20.0, 22.0, 0.8, 0, 0, 0),
+			],
+			'fire': [
+				('反坦克导弹车1', '反坦克导弹车', '反坦克导弹', 30.0, 5.0, -30.0, 15.0, 0.5, 0, 0, 0),
+				('火炮阵地1', '火炮', '榴弹炮', 28.0, 6.0, -25.0, 12.0, 0.4, 0, 0, 0),
+			],
+			'targets': [
+				# 单动目标：vx=3, vy=1.5 (快速向右上方移动)
+				('敌方坦克', '主战坦克', 3, 5.0, 30.0, 0.0, 3.0, 1.5, 0),
+			]
+		},
+		{
+			'name': '动目标单方案二-拦截车队',
+			'creator': '演示员B',
+			'recon': [
+				('侦察无人机2', '雷达无人机', 10, 40.0, 1.5, 4.0, -12.0, 30.0, 3.0, 0, 0, 0),
+				('光电侦察2', '光电无人机', 6, 25.0, 1.0, 3.8, -8.0, 28.0, 0.5, 0, 0, 0),
+			],
+			'command': [
+				('机动指挥车', 5, 32.0, 3.0, -18.0, 25.0, 0.6, 0, 0, 0),
+			],
+			'fire': [
+				('火箭炮1', '火箭炮', '火箭弹', 25.0, 8.0, -28.0, 18.0, 0.6, 0, 0, 0),
+				('导弹发射车1', '导弹发射车', '导弹', 35.0, 7.0, -32.0, 20.0, 0.5, 0, 0, 0),
+			],
+			'targets': [
+				# 单动目标：vx=-2.5, vy=1 (向左上方移动)
+				('敌方车队', '车队/纵列', 2, 35.0, 20.0, 0.0, -2.5, 1.0, 0),
+			]
+		},
+		{
+			'name': '动目标单方案三-打击指挥所',
+			'creator': '演示员C',
+			'recon': [
+				('高空侦察3', '雷达无人机', 12, 45.0, 1.6, 3.5, -5.0, 35.0, 4.0, 0, 0, 0),
+				('地面监听3', '声学侦察', 15, 15.0, 2.5, 2.2, -2.0, 32.0, 0.3, 0, 0, 0),
+			],
+			'command': [
+				('战术指挥中心', 8, 38.0, 2.8, -10.0, 28.0, 1.0, 0, 0, 0),
+			],
+			'fire': [
+				('精确打击导弹', '导弹发射车', '导弹', 40.0, 8.0, -25.0, 22.0, 0.5, 0, 0, 0),
+				('攻击无人机1', '攻击无人机', '精确制导炸弹', 20.0, 3.5, -20.0, 25.0, 2.0, 0, 0, 0),
+			],
+			'targets': [
+				# 单动目标：vx=2, vy=-1.5 (向右下方移动)
+				('敌方指挥所', '指挥所/坚固点', 4, 10.0, 38.0, 0.0, 2.0, -1.5, 0),
+			]
+		},
+		{
+			'name': '动目标单方案四-摧毁炮兵',
+			'creator': '演示员D',
+			'recon': [
+				('反炮兵雷达', '地面雷达', 25, 35.0, 2.0, 1.2, -8.0, 32.0, 1.0, 0, 0, 0),
+				('前沿观察哨', '光电无人机', 6, 20.0, 1.1, 4.0, -5.0, 30.0, 0.5, 0, 0, 0),
+			],
+			'command': [
+				('火力协调中心', 7, 33.0, 3.2, -15.0, 28.0, 0.9, 0, 0, 0),
+			],
+			'fire': [
+				('压制火炮', '火炮', '榴弹炮', 30.0, 6.5, -28.0, 20.0, 0.4, 0, 0, 0),
+				('火箭压制', '火箭炮', '火箭弹', 28.0, 8.5, -22.0, 18.0, 0.6, 0, 0, 0),
+			],
+			'targets': [
+				# 单动目标：vx=-2, vy=-1 (向左下方移动)
+				('敌方炮兵阵地', '炮兵阵地', 4, 30.0, 35.0, 0.0, -2.0, -1.0, 0),
+			]
+		},
+		{
+			'name': '动目标单方案五-突袭机场',
+			'creator': '演示员E',
+			'recon': [
+				('卫星侦察5', '卫星侦察', 50, 50.0, 1.8, 2.0, -2.0, 38.0, 6.0, 0, 0, 0),
+				('高空侦察5', '雷达无人机', 12, 42.0, 1.5, 3.8, 0.0, 35.0, 3.5, 0, 0, 0),
+			],
+			'command': [
+				('空地协调中心', 6, 36.0, 3.0, -8.0, 30.0, 1.0, 0, 0, 0),
+			],
+			'fire': [
+				('巡航导弹', '导弹发射车', '导弹', 55.0, 8.5, -20.0, 25.0, 0.5, 0, 0, 0),
+				('空袭编队', '攻击无人机', '精确制导炸弹', 25.0, 3.2, -15.0, 28.0, 2.0, 0, 0, 0),
+			],
+			'targets': [
+				# 单动目标：vx=1, vy=2.5 (快速向上移动)
+				('敌方机动机场', '机场设施', 5, 5.0, 25.0, 0.0, 1.0, 2.5, 0),
+			]
+		},
+	]
+
+
+def _insert_scheme_nodes(cursor, scheme_id, scheme):
+	"""插入方案的所有节点"""
+	# 侦察节点
+	recon_nodes = [
+		(scheme_id, *node) for node in scheme['recon']
+	]
 	
-	return [(
-		scheme_id,
-		node_name,
-		target_type,
-		threat_level,
-		x, y, 0, 0, 0, 0
-	)]
+	# 指挥节点
+	command_nodes = [
+		(scheme_id, *node) for node in scheme['command']
+	]
+	
+	# 火力节点
+	fire_nodes = [
+		(scheme_id, *node) for node in scheme['fire']
+	]
+	
+	# 目标节点（包含速度字段 vx, vy, vh）
+	target_nodes = [
+		(scheme_id, *node) for node in scheme['targets']
+	]
+	
+	# 批量插入
+	if recon_nodes:
+		cursor.executemany("""
+			INSERT INTO reconnaissance_nodes 
+			(scheme_id, node_name, model, parallel_limit, recon_range, recon_precision, processing_time, x, y, h, vx, vy, vh)
+			VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+		""", recon_nodes)
+	
+	if command_nodes:
+		cursor.executemany("""
+			INSERT INTO command_nodes 
+			(scheme_id, node_name, command_capacity, comm_distance, processing_time, x, y, h, vx, vy, vh)
+			VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+		""", command_nodes)
+	
+	if fire_nodes:
+		cursor.executemany("""
+			INSERT INTO firepower_nodes 
+			(scheme_id, node_name, firepower_type, ammo_type, comm_distance, processing_time, x, y, h, vx, vy, vh)
+			VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+		""", fire_nodes)
+	
+	if target_nodes:
+		cursor.executemany("""
+			INSERT INTO target_nodes 
+			(scheme_id, node_name, target_type, threat_level, x, y, h, vx, vy, vh)
+			VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+		""", target_nodes)
 
 
 if __name__ == "__main__":
-	# 创建数据库和表结构（包含方案管理功能和测试数据）
+	# 创建数据库和表结构（包含动目标测试方案）
 	create_database_and_tables(DATABASE_CONFIG, test_mode=True)
-print("数据库 ssl_3 及所有表已创建/存在（包含13个测试方案：8个场景化多目标方案和5个单目标演示方案）。")
+	print("数据库 ssl_3 及所有表已创建（包含10个动目标方案：5个多目标方案和5个单目标方案）。")

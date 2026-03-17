@@ -1,4 +1,7 @@
-"""算法服务，封装 UI 所需的算法入口。"""
+"""算法服务，封装 UI 所需的算法入口。
+
+支持动目标：通过 time_elapsed 参数实现目标位置随时间更新
+"""
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
@@ -10,6 +13,10 @@ from algorithms import (
     mopso_multi_target_allocation,
     pso_method,
     loop_method,
+    is_movable_target,
+    update_target_position,
+    update_all_positions,
+    has_movable_targets,
 )
 
 
