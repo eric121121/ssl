@@ -35,7 +35,24 @@ def create_scheme_nodes_editor(app, scheme_id, scheme_name):
 
     def refresh_scheme_plot():
         """在当前激活画布上展示最新节点。"""
-        if scheme_id:
+        # 如果正在动画中，直接从内存刷新，避免从数据库重新加载覆盖动画更新的坐标
+        if getattr(app, 'is_animating', False):
+            # 直接从内存中的节点数据刷新显示
+            node_lists = {
+                'target': app.target_nodes,
+                'recon': app.recon_nodes,
+                'command': app.command_nodes,
+                'fire': app.fire_nodes,
+            }
+            app.plot_view.render_nodes(node_lists, app.multi_target_mode)
+            # 如果有当前结果，也显示链路
+            if app.current_result:
+                try:
+                    nodes = app.get_nodes_dict()
+                    app.plot_view.render_result(nodes, app.current_result, show_optimal=False)
+                except Exception:
+                    pass
+        elif scheme_id:
             app.place_scheme_nodes(scheme_id, scheme_name)
 
     # 四个节点表的配置
